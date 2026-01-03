@@ -20,7 +20,7 @@ router = APIRouter(prefix="/auth", tags=["oauth"])
 
 
 _STATE_TTL_SECONDS = 10 * 60
-_state_store: dict[str, tuple[str, float]] = {}
+_state_store: dict[str, tuple[str, str, float]] = {}
 
 
 def _b64url(data: bytes) -> str:
@@ -37,18 +37,18 @@ def _new_state() -> str:
     return _b64url(secrets.token_bytes(32))
 
 
-def _save_state(state: str, code_verifier: str) -> None:
-    _state_store[state] = (code_verifier, time.time() + _STATE_TTL_SECONDS)
+def _save_state(state: str, code_verifier: str, redirect_url: str) -> None:
+    _state_store[state] = (code_verifier, redirect_url, time.time() + _STATE_TTL_SECONDS)
 
 
-def _pop_state(state: str) -> str | None:
+def _pop_state(state: str) -> tuple[str, str] | None:
     item = _state_store.pop(state, None)
     if not item:
         return None
-    code_verifier, exp = item
+    code_verifier, redirect_url, exp = item
     if time.time() > exp:
         return None
-    return code_verifier
+    return code_verifier, redirect_url
 
 
 def _require_env(value: str | None, name: str) -> str:
@@ -58,7 +58,7 @@ def _require_env(value: str | None, name: str) -> str:
 
 
 @router.get("/{provider}/login")
-def oauth_login(provider: str):
+def oauth_login(provider: str, redirect_url: str | None = None):
     provider = provider.lower()
 
     if provider == "google":
@@ -81,7 +81,10 @@ def oauth_login(provider: str):
 
     code_verifier, code_challenge = _pkce_pair()
     state = _new_state()
-    _save_state(state, code_verifier)
+
+    final_redirect_url = redirect_url or getattr(settings, "REDIRECT_URL", None)
+    final_redirect_url = _require_env(final_redirect_url, "REDIRECT_URL")
+    _save_state(state, code_verifier, final_redirect_url)
 
     params = {
         "client_id": client_id,
@@ -115,10 +118,12 @@ async def _exchange_code(provider: str, code: str, code_verifier: str) -> dict:
         token_url = "https://github.com/login/oauth/access_token"
         client_id = _require_env(getattr(settings, "GITHUB_CLIENT_ID", None), "GITHUB_CLIENT_ID")
         client_secret = _require_env(getattr(settings, "GITHUB_CLIENT_SECRET", None), "GITHUB_CLIENT_SECRET")
+        redirect_uri = _require_env(getattr(settings, "GITHUB_REDIRECT_URI", None), "GITHUB_REDIRECT_URI")
         data = {
             "client_id": client_id,
             "client_secret": client_secret,
             "code": code,
+            "redirect_uri": redirect_uri,
             "code_verifier": code_verifier,
         }
         headers = {"Accept": "application/json"}
@@ -205,9 +210,11 @@ async def _fetch_profile(provider: str, access_token: str) -> tuple[str, str, st
 @router.get("/{provider}/callback")
 async def oauth_callback(provider: str, code: str, state: str, db: Session = Depends(get_db)):
     provider = provider.lower()
-    code_verifier = _pop_state(state)
-    if not code_verifier:
+    state_item = _pop_state(state)
+    if not state_item:
         raise HTTPException(status_code=400, detail="Invalid or expired state")
+
+    code_verifier, redirect_url = state_item
 
     tokens = await _exchange_code(provider, code, code_verifier)
     access_token = tokens.get("access_token")
@@ -257,7 +264,5 @@ async def oauth_callback(provider: str, code: str, state: str, db: Session = Dep
         db.commit()
 
     token = create_access_token({"sub": str(user.id)})
-
-    redirect_url = _require_env(getattr(settings, "REDIRECT_URL", None), "REDIRECT_URL")
     sep = "&" if ("?" in redirect_url) else "?"
     return RedirectResponse(url=f"{redirect_url}{sep}token={token}")
