@@ -61,42 +61,47 @@ def _require_env(value: str | None, name: str) -> str:
 def oauth_login(provider: str, redirect_url: str | None = None):
     provider = provider.lower()
 
-    if provider == "google":
-        client_id = _require_env(getattr(settings, "GOOGLE_CLIENT_ID", None), "GOOGLE_CLIENT_ID")
-        redirect_uri = _require_env(getattr(settings, "GOOGLE_REDIRECT_URI", None), "GOOGLE_REDIRECT_URI")
-        scope = "openid email profile"
-        auth_url = "https://accounts.google.com/o/oauth2/v2/auth"
-    elif provider == "github":
-        client_id = _require_env(getattr(settings, "GITHUB_CLIENT_ID", None), "GITHUB_CLIENT_ID")
-        redirect_uri = _require_env(getattr(settings, "GITHUB_REDIRECT_URI", None), "GITHUB_REDIRECT_URI")
-        scope = "read:user user:email"
-        auth_url = "https://github.com/login/oauth/authorize"
-    elif provider == "discord":
-        client_id = _require_env(getattr(settings, "DISCORD_CLIENT_ID", None), "DISCORD_CLIENT_ID")
-        redirect_uri = _require_env(getattr(settings, "DISCORD_REDIRECT_URI", None), "DISCORD_REDIRECT_URI")
-        scope = "identify email"
-        auth_url = "https://discord.com/api/oauth2/authorize"
-    else:
-        raise HTTPException(status_code=404, detail="Unknown provider")
+    try:
+        if provider == "google":
+            client_id = _require_env(getattr(settings, "GOOGLE_CLIENT_ID", None), "GOOGLE_CLIENT_ID")
+            redirect_uri = _require_env(getattr(settings, "GOOGLE_REDIRECT_URI", None), "GOOGLE_REDIRECT_URI")
+            scope = "openid email profile"
+            auth_url = "https://accounts.google.com/o/oauth2/v2/auth"
+        elif provider == "github":
+            client_id = _require_env(getattr(settings, "GITHUB_CLIENT_ID", None), "GITHUB_CLIENT_ID")
+            redirect_uri = _require_env(getattr(settings, "GITHUB_REDIRECT_URI", None), "GITHUB_REDIRECT_URI")
+            scope = "read:user user:email"
+            auth_url = "https://github.com/login/oauth/authorize"
+        elif provider == "discord":
+            client_id = _require_env(getattr(settings, "DISCORD_CLIENT_ID", None), "DISCORD_CLIENT_ID")
+            redirect_uri = _require_env(getattr(settings, "DISCORD_REDIRECT_URI", None), "DISCORD_REDIRECT_URI")
+            scope = "identify email"
+            auth_url = "https://discord.com/api/oauth2/authorize"
+        else:
+            raise HTTPException(status_code=404, detail="Unknown provider")
 
-    code_verifier, code_challenge = _pkce_pair()
-    state = _new_state()
+        code_verifier, code_challenge = _pkce_pair()
+        state = _new_state()
 
-    final_redirect_url = redirect_url or getattr(settings, "REDIRECT_URL", None)
-    final_redirect_url = _require_env(final_redirect_url, "REDIRECT_URL")
-    _save_state(state, code_verifier, final_redirect_url)
+        final_redirect_url = redirect_url or getattr(settings, "REDIRECT_URL", None)
+        final_redirect_url = _require_env(final_redirect_url, "REDIRECT_URL")
+        _save_state(state, code_verifier, final_redirect_url)
 
-    params = {
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "response_type": "code",
-        "scope": scope,
-        "state": state,
-        "code_challenge": code_challenge,
-        "code_challenge_method": "S256",
-    }
+        params = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": scope,
+            "state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        }
 
-    return {"auth_url": f"{auth_url}?{urlencode(params)}"}
+        return {"auth_url": f"{auth_url}?{urlencode(params)}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 async def _exchange_code(provider: str, code: str, code_verifier: str) -> dict:
